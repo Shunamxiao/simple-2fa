@@ -2,86 +2,218 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>极简 2FA 验证器</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>2FA 验证器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.3.4/vue.global.prod.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/otpauth/9.1.4/otpauth.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 90%; max-width: 400px; text-align: center; }
-        h1 { color: #333; margin-bottom: 1.5rem; font-size: 1.5rem; }
-        input { width: 100%; padding: 12px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
-        button { background: #0070f3; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; cursor: pointer; width: 100%; transition: background 0.2s; }
-        button:hover { background: #005bb5; }
-        .token-display { margin-top: 2rem; }
-        .code { font-size: 3rem; font-weight: bold; color: #333; letter-spacing: 4px; font-family: monospace; }
-        .timer { color: #888; margin-top: 0.5rem; font-size: 0.9rem; }
-        .error { color: red; font-size: 0.9rem; margin-top: 0.5rem; display: none; }
+        body { background-color: #f9fafb; }
+        .progress-ring__circle {
+            transition: stroke-dashoffset 1s linear;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+        [v-cloak] { display: none; }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h1>🔐 2FA 验证器</h1>
-        <input type="text" id="secret" placeholder="在此粘贴 Secret Key (如: JBSWY3DPEHPK3PXP)" autocomplete="off">
-        <button onclick="generateToken()">生成验证码</button>
-        <div id="error" class="error">密钥格式无效</div>
+    <div id="app" class="max-w-md mx-auto min-h-screen bg-white shadow-lg relative flex flex-col" v-cloak>
+        <!-- Header -->
+        <header class="flex justify-between items-center p-5 border-b border-gray-100 bg-white sticky top-0 z-10">
+            <h1 class="text-xl font-bold text-gray-800 tracking-tight">Authenticator</h1>
+            <button @click="showAddModal = true" class="text-blue-600 hover:bg-blue-50 p-2 rounded-full transition">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+            </button>
+        </header>
+
+        <!-- List -->
+        <main class="flex-1 p-4 space-y-3 overflow-y-auto">
+            <div v-if="accounts.length === 0" class="text-center text-gray-400 mt-20">
+                <p>暂无账号</p>
+                <p class="text-sm">点击右上角 + 添加</p>
+            </div>
+
+            <div v-for="(acc, index) in accounts" :key="index" class="bg-white border border-gray-100 rounded-xl p-4 shadow-sm hover:shadow-md transition relative group">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-sm text-gray-500 font-medium truncate max-w-[70%]">{{ acc.issuer || 'Unknown' }}</span>
+                    <button @click="deleteAccount(index)" class="text-red-400 opacity-0 group-hover:opacity-100 text-xs transition">删除</button>
+                </div>
+                <div class="flex justify-between items-end">
+                    <div class="text-gray-800 font-bold text-3xl tracking-widest font-mono select-all cursor-pointer" @click="copy(acc.token)">
+                        {{ formatToken(acc.token) }}
+                    </div>
+                    <!-- Timer Ring -->
+                    <div class="relative w-6 h-6 mb-1">
+                        <svg class="w-full h-full" viewBox="0 0 36 36">
+                            <path class="text-gray-200" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="4" />
+                            <path class="progress-ring__circle text-blue-500" :stroke-dasharray="100" :stroke-dashoffset="progressOffset" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="4" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="text-xs text-gray-400 mt-1 truncate">{{ acc.name }}</div>
+            </div>
+        </main>
+
+        <!-- Add Modal -->
+        <div v-if="showAddModal" class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50 p-4">
+            <div class="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+                <h3 class="text-lg font-bold mb-4">添加账号</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">服务商 (如 Google, GitHub)</label>
+                        <input v-model="newAccount.issuer" class="w-full border rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="GitHub">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">账号名称</label>
+                        <input v-model="newAccount.name" class="w-full border rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="user@example.com">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">密钥 (Secret Key)</label>
+                        <input v-model="newAccount.secret" class="w-full border rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none font-mono uppercase" placeholder="JBSWY3DPEHPK3PXP">
+                    </div>
+                    <div v-if="addError" class="text-red-500 text-sm">{{ addError }}</div>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button @click="showAddModal = false" class="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-lg">取消</button>
+                    <button @click="addAccount" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存</button>
+                </div>
+            </div>
+        </div>
         
-        <div class="token-display" id="result" style="display: none;">
-            <div class="code" id="token">000 000</div>
-            <div class="timer" id="timer">30s</div>
+        <!-- Toast -->
+        <div v-if="toastMsg" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-full text-sm shadow-lg transition-opacity duration-300">
+            {{ toastMsg }}
         </div>
     </div>
 
     <script>
-        let timerInterval;
+        const { createApp, ref, onMounted, onUnmounted } = Vue;
 
-        function generateToken() {
-            const secretInput = document.getElementById('secret').value.replace(/\s/g, '');
-            const errorDiv = document.getElementById('error');
-            const resultDiv = document.getElementById('result');
-            const tokenDiv = document.getElementById('token');
-            const timerDiv = document.getElementById('timer');
+        createApp({
+            setup() {
+                const accounts = ref([]);
+                const showAddModal = ref(false);
+                const newAccount = ref({ issuer: '', name: '', secret: '' });
+                const addError = ref('');
+                const progressOffset = ref(0);
+                const toastMsg = ref('');
+                let intervalId;
 
-            if (!secretInput) return;
+                // Load from LocalStorage
+                const loadAccounts = () => {
+                    const saved = localStorage.getItem('simple_2fa_accounts');
+                    if (saved) {
+                        try {
+                            const raw = JSON.parse(saved);
+                            // Re-instantiate TOTP objects logic is done in loop
+                            accounts.value = raw.map(acc => ({
+                                ...acc,
+                                token: '--- ---'
+                            }));
+                        } catch(e) { console.error(e); }
+                    }
+                };
 
-            try {
-                // Validate/Create TOTP object
-                const totp = new OTPAuth.TOTP({
-                    algorithm: 'SHA1',
-                    digits: 6,
-                    period: 30,
-                    secret: OTPAuth.Secret.fromBase32(secretInput)
+                const saveAccounts = () => {
+                    // Only save config, not dynamic tokens
+                    const toSave = accounts.value.map(({ issuer, name, secret }) => ({ issuer, name, secret }));
+                    localStorage.setItem('simple_2fa_accounts', JSON.stringify(toSave));
+                };
+
+                const updateTokens = () => {
+                    const now = Date.now();
+                    const epoch = Math.floor(now / 1000);
+                    const period = 30;
+                    const remaining = period - (epoch % period);
+                    
+                    // Update progress ring (100 to 0)
+                    progressOffset.value = 100 - ((remaining / period) * 100);
+
+                    accounts.value.forEach(acc => {
+                        try {
+                            const totp = new OTPAuth.TOTP({
+                                algorithm: 'SHA1',
+                                digits: 6,
+                                period: 30,
+                                secret: OTPAuth.Secret.fromBase32(acc.secret)
+                            });
+                            acc.token = totp.generate();
+                        } catch (e) {
+                            acc.token = 'ERROR';
+                        }
+                    });
+                };
+
+                const addAccount = () => {
+                    if (!newAccount.value.secret) {
+                        addError.value = "密钥不能为空";
+                        return;
+                    }
+                    try {
+                        // Test secret validity
+                        OTPAuth.Secret.fromBase32(newAccount.value.secret.replace(/\s/g, ''));
+                        
+                        accounts.value.push({
+                            issuer: newAccount.value.issuer || 'Unknown',
+                            name: newAccount.value.name || 'Account',
+                            secret: newAccount.value.secret.replace(/\s/g, ''),
+                            token: '...'
+                        });
+                        saveAccounts();
+                        updateTokens();
+                        showAddModal.value = false;
+                        newAccount.value = { issuer: '', name: '', secret: '' };
+                        addError.value = '';
+                    } catch (e) {
+                        addError.value = "密钥格式无效 (请使用 Base32 字符串)";
+                    }
+                };
+
+                const deleteAccount = (index) => {
+                    if (confirm('确定要删除这个账号吗？')) {
+                        accounts.value.splice(index, 1);
+                        saveAccounts();
+                    }
+                };
+
+                const formatToken = (token) => {
+                    if (!token || token.length !== 6) return token;
+                    return token.slice(0, 3) + ' ' + token.slice(3);
+                };
+                
+                const copy = (text) => {
+                    navigator.clipboard.writeText(text.replace(' ', ''));
+                    toastMsg.value = '已复制';
+                    setTimeout(() => toastMsg.value = '', 1500);
+                }
+
+                onMounted(() => {
+                    loadAccounts();
+                    updateTokens();
+                    intervalId = setInterval(updateTokens, 1000);
                 });
 
-                errorDiv.style.display = 'none';
-                resultDiv.style.display = 'block';
+                onUnmounted(() => {
+                    clearInterval(intervalId);
+                });
 
-                // Update immediately
-                update(totp);
-
-                // Clear prev interval
-                if (timerInterval) clearInterval(timerInterval);
-
-                // Update loop
-                timerInterval = setInterval(() => {
-                    update(totp);
-                }, 1000);
-
-            } catch (e) {
-                console.error(e);
-                errorDiv.innerText = "无效的密钥 (请确保是 Base32 格式)";
-                errorDiv.style.display = 'block';
-                resultDiv.style.display = 'none';
+                return {
+                    accounts,
+                    showAddModal,
+                    newAccount,
+                    addAccount,
+                    addError,
+                    progressOffset,
+                    deleteAccount,
+                    formatToken,
+                    copy,
+                    toastMsg
+                };
             }
-        }
-
-        function update(totp) {
-            const token = totp.generate();
-            const formatted = token.slice(0, 3) + ' ' + token.slice(3);
-            document.getElementById('token').innerText = formatted;
-            
-            const seconds = 30 - (Math.floor(Date.now() / 1000) % 30);
-            document.getElementById('timer').innerText = `剩余有效时间: ${seconds}s`;
-        }
+        }).mount('#app');
     </script>
 </body>
 </html>
