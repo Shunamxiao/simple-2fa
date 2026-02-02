@@ -6,6 +6,7 @@
     <title>2FA 验证器</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.3.4/vue.global.prod.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/otpauth/9.1.4/otpauth.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #f9fafb; }
@@ -22,7 +23,7 @@
         <!-- Header -->
         <header class="flex justify-between items-center p-5 border-b border-gray-100 bg-white sticky top-0 z-10">
             <h1 class="text-xl font-bold text-gray-800 tracking-tight">Authenticator</h1>
-            <button @click="showAddModal = true" class="text-blue-600 hover:bg-blue-50 p-2 rounded-full transition">
+            <button @click="openAddModal" class="text-blue-600 hover:bg-blue-50 p-2 rounded-full transition">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                 </svg>
@@ -60,10 +61,22 @@
         <!-- Add Modal -->
         <div v-if="showAddModal" class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50 p-4">
             <div class="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl">
-                <h3 class="text-lg font-bold mb-4">添加账号</h3>
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-bold">添加账号</h3>
+                    <!-- QR Upload Button -->
+                    <button @click="triggerFileUpload" class="text-blue-600 text-sm flex items-center gap-1 hover:bg-blue-50 px-2 py-1 rounded-lg transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                        </svg>
+                        识别二维码
+                    </button>
+                    <input type="file" ref="fileInput" accept="image/*" class="hidden" @change="handleFileUpload">
+                </div>
+
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm text-gray-600 mb-1">服务商 (如 Google, GitHub)</label>
+                        <label class="block text-sm text-gray-600 mb-1">服务商</label>
                         <input v-model="newAccount.issuer" class="w-full border rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="GitHub">
                     </div>
                     <div>
@@ -71,7 +84,7 @@
                         <input v-model="newAccount.name" class="w-full border rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="user@example.com">
                     </div>
                     <div>
-                        <label class="block text-sm text-gray-600 mb-1">密钥 (Secret Key)</label>
+                        <label class="block text-sm text-gray-600 mb-1">密钥 (Secret)</label>
                         <input v-model="newAccount.secret" class="w-full border rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none font-mono uppercase" placeholder="JBSWY3DPEHPK3PXP">
                     </div>
                     <div v-if="addError" class="text-red-500 text-sm">{{ addError }}</div>
@@ -84,7 +97,7 @@
         </div>
         
         <!-- Toast -->
-        <div v-if="toastMsg" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-full text-sm shadow-lg transition-opacity duration-300">
+        <div v-if="toastMsg" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-full text-sm shadow-lg transition-opacity duration-300 z-50">
             {{ toastMsg }}
         </div>
     </div>
@@ -100,25 +113,20 @@
                 const addError = ref('');
                 const progressOffset = ref(0);
                 const toastMsg = ref('');
+                const fileInput = ref(null);
                 let intervalId;
 
-                // Load from LocalStorage
                 const loadAccounts = () => {
                     const saved = localStorage.getItem('simple_2fa_accounts');
                     if (saved) {
                         try {
                             const raw = JSON.parse(saved);
-                            // Re-instantiate TOTP objects logic is done in loop
-                            accounts.value = raw.map(acc => ({
-                                ...acc,
-                                token: '--- ---'
-                            }));
+                            accounts.value = raw.map(acc => ({ ...acc, token: '--- ---' }));
                         } catch(e) { console.error(e); }
                     }
                 };
 
                 const saveAccounts = () => {
-                    // Only save config, not dynamic tokens
                     const toSave = accounts.value.map(({ issuer, name, secret }) => ({ issuer, name, secret }));
                     localStorage.setItem('simple_2fa_accounts', JSON.stringify(toSave));
                 };
@@ -128,8 +136,6 @@
                     const epoch = Math.floor(now / 1000);
                     const period = 30;
                     const remaining = period - (epoch % period);
-                    
-                    // Update progress ring (100 to 0)
                     progressOffset.value = 100 - ((remaining / period) * 100);
 
                     accounts.value.forEach(acc => {
@@ -141,10 +147,14 @@
                                 secret: OTPAuth.Secret.fromBase32(acc.secret)
                             });
                             acc.token = totp.generate();
-                        } catch (e) {
-                            acc.token = 'ERROR';
-                        }
+                        } catch (e) { acc.token = 'ERROR'; }
                     });
+                };
+
+                const openAddModal = () => {
+                    newAccount.value = { issuer: '', name: '', secret: '' };
+                    addError.value = '';
+                    showAddModal.value = true;
                 };
 
                 const addAccount = () => {
@@ -153,9 +163,7 @@
                         return;
                     }
                     try {
-                        // Test secret validity
                         OTPAuth.Secret.fromBase32(newAccount.value.secret.replace(/\s/g, ''));
-                        
                         accounts.value.push({
                             issuer: newAccount.value.issuer || 'Unknown',
                             name: newAccount.value.name || 'Account',
@@ -165,24 +173,21 @@
                         saveAccounts();
                         updateTokens();
                         showAddModal.value = false;
-                        newAccount.value = { issuer: '', name: '', secret: '' };
-                        addError.value = '';
+                        toastMsg.value = '添加成功';
+                        setTimeout(() => toastMsg.value = '', 1500);
                     } catch (e) {
-                        addError.value = "密钥格式无效 (请使用 Base32 字符串)";
+                        addError.value = "密钥格式无效";
                     }
                 };
 
                 const deleteAccount = (index) => {
-                    if (confirm('确定要删除这个账号吗？')) {
+                    if (confirm('确定删除?')) {
                         accounts.value.splice(index, 1);
                         saveAccounts();
                     }
                 };
 
-                const formatToken = (token) => {
-                    if (!token || token.length !== 6) return token;
-                    return token.slice(0, 3) + ' ' + token.slice(3);
-                };
+                const formatToken = (token) => (!token || token.length !== 6) ? token : token.slice(0, 3) + ' ' + token.slice(3);
                 
                 const copy = (text) => {
                     navigator.clipboard.writeText(text.replace(' ', ''));
@@ -190,27 +195,95 @@
                     setTimeout(() => toastMsg.value = '', 1500);
                 }
 
+                // QR Logic
+                const triggerFileUpload = () => {
+                    fileInput.value.click();
+                };
+
+                const handleFileUpload = (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0);
+                            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            
+                            const code = jsQR(imageData.data, imageData.width, imageData.height);
+                            
+                            if (code) {
+                                parseOtpUrl(code.data);
+                            } else {
+                                addError.value = "未能识别二维码，请确保图片清晰";
+                            }
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                    // Reset input
+                    event.target.value = '';
+                };
+
+                const parseOtpUrl = (url) => {
+                    try {
+                        if (!url.startsWith('otpauth://')) {
+                            throw new Error('Not an otpauth URL');
+                        }
+                        const urlObj = new URL(url);
+                        const params = urlObj.searchParams;
+                        const secret = params.get('secret');
+                        const issuer = params.get('issuer') || '';
+                        
+                        // Parse label path (e.g. /totp/Issuer:Account)
+                        let label = decodeURIComponent(urlObj.pathname.replace(/^\/\/totp\//, '').replace(/^\/totp\//, ''));
+                        let account = label;
+                        
+                        if (label.includes(':')) {
+                            const parts = label.split(':');
+                            account = parts[1].trim();
+                            if (!issuer) { 
+                                // use issuer from label if not in params
+                                // Note: We update the reactive object
+                                newAccount.value.issuer = parts[0].trim(); 
+                            }
+                        } else {
+                            account = label;
+                        }
+
+                        if (secret) {
+                            newAccount.value.secret = secret;
+                            if (issuer) newAccount.value.issuer = issuer;
+                            newAccount.value.name = account;
+                            addError.value = '';
+                            toastMsg.value = '识别成功！请检查后保存';
+                            setTimeout(() => toastMsg.value = '', 2000);
+                        } else {
+                            throw new Error('No secret found');
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        addError.value = "二维码格式不正确 (非标准 2FA 码)";
+                    }
+                };
+
                 onMounted(() => {
                     loadAccounts();
                     updateTokens();
                     intervalId = setInterval(updateTokens, 1000);
                 });
 
-                onUnmounted(() => {
-                    clearInterval(intervalId);
-                });
+                onUnmounted(() => clearInterval(intervalId));
 
                 return {
-                    accounts,
-                    showAddModal,
-                    newAccount,
-                    addAccount,
-                    addError,
-                    progressOffset,
-                    deleteAccount,
-                    formatToken,
-                    copy,
-                    toastMsg
+                    accounts, showAddModal, newAccount, addAccount, addError,
+                    progressOffset, deleteAccount, formatToken, copy, toastMsg,
+                    openAddModal, fileInput, triggerFileUpload, handleFileUpload
                 };
             }
         }).mount('#app');
