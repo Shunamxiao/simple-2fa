@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>极简 2FA 验证器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/otpauth/9.1.4/otpauth.umd.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 90%; max-width: 400px; text-align: center; }
+        h1 { color: #333; margin-bottom: 1.5rem; font-size: 1.5rem; }
+        input { width: 100%; padding: 12px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        button { background: #0070f3; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; cursor: pointer; width: 100%; transition: background 0.2s; }
+        button:hover { background: #005bb5; }
+        .token-display { margin-top: 2rem; }
+        .code { font-size: 3rem; font-weight: bold; color: #333; letter-spacing: 4px; font-family: monospace; }
+        .timer { color: #888; margin-top: 0.5rem; font-size: 0.9rem; }
+        .error { color: red; font-size: 0.9rem; margin-top: 0.5rem; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔐 2FA 验证器</h1>
+        <input type="text" id="secret" placeholder="在此粘贴 Secret Key (如: JBSWY3DPEHPK3PXP)" autocomplete="off">
+        <button onclick="generateToken()">生成验证码</button>
+        <div id="error" class="error">密钥格式无效</div>
+        
+        <div class="token-display" id="result" style="display: none;">
+            <div class="code" id="token">000 000</div>
+            <div class="timer" id="timer">30s</div>
+        </div>
+    </div>
+
+    <script>
+        let timerInterval;
+
+        function generateToken() {
+            const secretInput = document.getElementById('secret').value.replace(/\s/g, '');
+            const errorDiv = document.getElementById('error');
+            const resultDiv = document.getElementById('result');
+            const tokenDiv = document.getElementById('token');
+            const timerDiv = document.getElementById('timer');
+
+            if (!secretInput) return;
+
+            try {
+                // Validate/Create TOTP object
+                const totp = new OTPAuth.TOTP({
+                    algorithm: 'SHA1',
+                    digits: 6,
+                    period: 30,
+                    secret: OTPAuth.Secret.fromBase32(secretInput)
+                });
+
+                errorDiv.style.display = 'none';
+                resultDiv.style.display = 'block';
+
+                // Update immediately
+                update(totp);
+
+                // Clear prev interval
+                if (timerInterval) clearInterval(timerInterval);
+
+                // Update loop
+                timerInterval = setInterval(() => {
+                    update(totp);
+                }, 1000);
+
+            } catch (e) {
+                console.error(e);
+                errorDiv.innerText = "无效的密钥 (请确保是 Base32 格式)";
+                errorDiv.style.display = 'block';
+                resultDiv.style.display = 'none';
+            }
+        }
+
+        function update(totp) {
+            const token = totp.generate();
+            const formatted = token.slice(0, 3) + ' ' + token.slice(3);
+            document.getElementById('token').innerText = formatted;
+            
+            const seconds = 30 - (Math.floor(Date.now() / 1000) % 30);
+            document.getElementById('timer').innerText = `剩余有效时间: ${seconds}s`;
+        }
+    </script>
+</body>
+</html>
